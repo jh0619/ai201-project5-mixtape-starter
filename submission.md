@@ -182,3 +182,46 @@ Contrast: the working `add_to_playlist` path _does_ create a
 `song_added_to_playlist` notification for the sharer. Rating is missing the
 equivalent call entirely, confirming the reported "notified on playlist-add but
 not on rating" behavior.
+
+---
+
+## Milestone 3 — Root Cause Analyses
+
+### Bug #5 — Last song in a playlist never shows up
+
+**Issue:** #5 — "The last song in a playlist never shows up" (`playlist_service.py`)
+
+**How I reproduced it:** Against the seeded DB, I compared the ground-truth
+`playlist_entries` row count for "Late Night Vibes" (7) against
+`get_playlist_songs(playlist_id)`, which returned 6. The dropped song was the
+one with the highest `position` ("Free Throws"). I confirmed the pattern held
+for all three seeded playlists (each 7 entries → 6 returned).
+
+**How I found the root cause:** I traced the call chain top-down:
+`GET /playlists/<id>/songs` → `routes/playlists.py::get_songs()` →
+`playlist_service.get_playlist_songs()`. Reading that function, the query itself
+was correct — it joins `playlist_entries`, filters by playlist, and orders by
+`asc(position)`. The only remaining suspect was the return statement. The last
+line built the result from `songs[:-1]` instead of `songs`. The docstring one
+line above literally says "This function returns all songs in the playlist,"
+which contradicted the slice — that mismatch was the moment I was sure this was
+the exact cause, not just a suspicious area.
+
+**The root cause:** Python's `list[:-1]` slice returns every element _except the
+last one_. Because the query already ordered songs ascending by `position`, the
+element being sliced off was always the highest-position (last) song in the
+playlist. So every playlist rendered with its final track missing, and a
+one-song playlist returned an empty list. Nothing was wrong with the query,
+ordering, or data — only the slice in the return expression.
+
+**Your fix and side-effect check:** I changed `songs[:-1]` to `songs` — a
+one-token fix that returns the full ordered list. I verified boundary conditions
+on both sides: N-song playlists now return all N (was N−1); a 1-song playlist
+returns 1 (previously returned 0, the worst case of the bug); an empty playlist
+still returns `[]`. I also confirmed the ordering is unaffected — "Free Throws"
+now appears last, in correct position order. No other code depends on
+`get_playlist_songs` truncating its output, so nothing downstream breaks.
+
+**AI usage:** I located and diagnosed this bug by reading the code directly; no
+AI was used for the diagnosis. (I used an AI assistant earlier only for
+codebase orientation, as disclosed at the top.)
