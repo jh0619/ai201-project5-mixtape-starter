@@ -127,11 +127,58 @@ Then commits. `GET /users/<id>/streak` reads `user.listening_streak` back.
 | 4   | Notified on playlist-add but not on rating        | `notification_service.py` | `rate_song` never calls `create_notification` (compare to `add_to_playlist`)     |
 | 5   | Last song in a playlist never shows up            | `playlist_service.py`     | `get_playlist_songs` return value                                                |
 
-Plan: I'll fix #5, #3, and #1 — the three most localized bugs, each with
-a single-spot root cause that's easy to reproduce with the seed data (which is
-purpose-built to expose them: multi-tag songs trigger #3, 5–7-song playlists
-trigger #5). This satisfies the "fix at least 3" requirement. I'll work them in
-order #5 → #3 → #1, from easiest-to-reproduce toward the more subtle
-date-logic bug, and use #5 as the candidate for the regression-test stretch
-goal. Issues #2 (feed recency) and #4 (missing rating notification) are out of
-scope for this submission.
+**Plan:** I'll fix **#5, #1, and #4** — three bugs with localized root causes
+that all reproduce cleanly against the seed data. This satisfies the "fix at
+least 3" requirement. #5 is also my candidate for the regression-test stretch
+goal. Issue #2 (feed recency) is out of scope.
+
+---
+
+## Milestone 2 — Reproductions
+
+I reproduced each chosen bug deliberately before touching any code, running the
+services directly against the seeded `mixtape.db` inside an app context. No
+fixes were applied at this stage.
+
+### #5 — Last song in a playlist never shows up (`playlist_service.py`)
+
+**How I reproduced it:** Seed data creates a playlist "Late Night Vibes" with 7
+entries. I compared the ground-truth row count in the `playlist_entries` table
+against what `get_playlist_songs(playlist_id)` returns:
+
+- `playlist_entries` rows for the playlist: **7**
+- songs returned by the service: **6**
+- The song at the highest `position` ("Free Throws") is silently dropped.
+
+Any playlist with N songs returns N−1. The condition is simply "the playlist has
+at least one song" — the last one is always missing.
+
+### #1 — Listening streak keeps resetting (`streak_service.py`)
+
+**How I reproduced it:** This is date-dependent, so I drove
+`update_listening_streak(user, now)` with controlled datetimes. Setup for each
+run: user has a 5-day streak and `last_listened_at` = yesterday; then they
+listen again "today". Expected: streak → 6.
+
+| "Today"               | `weekday()` | Streak result | Correct? |
+| --------------------- | ----------- | ------------- | -------- |
+| Saturday 2026-07-04   | 5           | 6             | ✅       |
+| **Sunday 2026-07-05** | **6**       | **1 (reset)** | ❌       |
+| Monday 2026-07-06     | 0           | 6             | ✅       |
+
+The bug fires **only when today is a Sunday** (`weekday() == 6`). A user with a
+valid consecutive-day streak has it wiped to 1 every Sunday.
+
+### #4 — Rating a song doesn't notify the sharer (`notification_service.py`)
+
+**How I reproduced it:** I picked a song, identified its sharer, and had a
+_different_ user rate it, counting the sharer's notifications before and after:
+
+- sharer notifications before rating: **1**
+- sharer notifications after `rate_song(rater, song, 5)`: **1** (unchanged)
+- notifications created by the rating: **0** — expected 1.
+
+Contrast: the working `add_to_playlist` path _does_ create a
+`song_added_to_playlist` notification for the sharer. Rating is missing the
+equivalent call entirely, confirming the reported "notified on playlist-add but
+not on rating" behavior.
