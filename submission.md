@@ -267,3 +267,47 @@ still works on the day that was previously mishandled.
 directly. I separately confirmed my understanding of `datetime.weekday()`'s
 Mon=0…Sun=6 convention (vs. `isoweekday()`'s Mon=1…Sun=7) before finalizing the
 fix. No AI was used to locate the bug.
+
+### Bug #4 — Rating a song doesn't notify the sharer
+
+**Issue:** #4 — "I get notified when someone adds my song to a playlist, but not
+when someone rates it" (`notification_service.py`)
+
+**How I reproduced it:** I had one user rate a song shared by a _different_ user,
+counting the sharer's notifications before and after. Before: 1. After
+`rate_song(rater, song, 5)`: still 1 — zero notifications created. For contrast,
+the `add_to_playlist` path did create a `song_added_to_playlist` notification
+for the same sharer, confirming the asymmetry described in the issue.
+
+**How I found the root cause:** I opened `notification_service.py` and read the
+two paths side by side, since the brief flagged this as architectural rather
+than a typo. `add_to_playlist` ends with a guarded call to `create_notification`
+(notify `song.shared_by` unless the actor is the sharer). `rate_song` performs
+the upsert, commits, and returns — with no notification block at all. The
+structural difference was the whole diagnosis: the working path has a
+notify-the-sharer step and the rating path is simply missing it. The
+`create_notification` docstring even lists `'song_rated'` as an example type,
+confirming the notification was intended to exist.
+
+**The root cause:** `rate_song` never called `create_notification`. The feature
+wasn't broken by a bad line — the entire "notify the song's original sharer"
+step was absent from the rating code path, so rating a song produced no
+notification for anyone. This is a missing-implementation (architectural) bug,
+in contrast to `add_to_playlist`, which implements the same pattern correctly.
+
+**Your fix and side-effect check:** I added the notification step to `rate_song`,
+mirroring `add_to_playlist` exactly: after the commit, if `song.shared_by !=
+user_id`, call `create_notification(user_id=song.shared_by,
+notification_type="song_rated", body=...)`. I placed it after the commit so a
+failed rating never emits a notification. Checks: (a) a different user rating a
+song now creates exactly one `song_rated` notification for the sharer and still
+saves the rating; (b) a user rating _their own_ song creates none, because of
+the same `shared_by != user_id` guard the playlist path uses; (c) re-rating an
+existing song still updates the score in place (one Rating row, preserved by the
+model's unique constraint) and notifies again, matching how `add_to_playlist`
+notifies on every call; (d) the unrelated 1–5 score validation still rejects
+out-of-range scores. No other code path was modified.
+
+**AI usage:** I diagnosed this by reading the two code paths directly; the
+"compare the working path to the missing one" strategy came from the issue hint.
+No AI was used to locate the bug.
