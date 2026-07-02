@@ -1,5 +1,58 @@
 # Project 5: Mixtape Bug Hunt — Submission
 
+## Commit History
+
+`git log --oneline` on the `bugfix/mixtape` branch — one `fix:` commit per bug:
+
+![git log --oneline showing separate fix commits on bugfix/mixtape](screenshots/git-log.png)
+
+## AI Usage
+
+I used an AI assistant (Claude) throughout this project. Rather than claim I
+worked alone, here is an honest account of where it helped, and where I had to
+step in and verify.
+
+**Codebase navigation (Milestone 1).** This was the most useful application. I
+had the AI summarize each service module ("what is this file responsible for,
+what does each function do?") and trace the route→service→model call chains,
+which is how I built the codebase map. I still opened and read every file
+myself to confirm the summaries were accurate before writing anything down —
+the map reflects my own reading, with the AI used to get oriented faster.
+
+**Reproduction (Milestone 2).** I used the AI to help write small scripts that
+call the service functions directly with controlled inputs (e.g. driving
+`update_listening_streak` across all seven weekdays, counting a sharer's
+notifications before/after a rating) instead of firing HTTP requests. Running
+the code against the seed data — not the AI's say-so — is what actually
+confirmed each bug.
+
+**Where the AI pointed me in the wrong direction (Issue #3).** My initial plan,
+which the AI agreed with, assumed the `search_songs` `outerjoin` to `song_tags`
+would produce duplicate rows for multi-tag songs — a plausible and common bug.
+When I actually reproduced it, it didn't happen: on SQLAlchemy 2.0.51 the legacy
+`db.session.query(Song)...all()` API deduplicates entity rows by primary key, so
+no user-visible duplicate ever appears. This was the clearest case of "plausible
+but wrong" — the diagnosis only held up once I ran the query and inspected the
+row counts myself (raw join = 3 rows, `Query.all()` = 1). Because I couldn't
+reproduce the reported behavior, I swapped #3 for #4.
+
+**Diagnosis and fixes (Milestone 3).** For each bug I read the relevant function
+myself, formed a hypothesis, and confirmed it by running the code before
+changing anything. The AI was useful for confirming details — for example, that
+`datetime.weekday()` uses Mon=0…Sun=6 while `isoweekday()` uses Mon=1…Sun=7,
+which mattered for the streak bug. The fixes are small and targeted; I verified
+each one against boundary conditions (empty/one-song playlists, all seven
+weekdays, self-rating vs. rating someone else's song).
+
+**Drafting.** I used the AI to help draft and tighten the wording of this
+document. The technical content, the decision to swap #3 for #4, and the
+verification steps are mine.
+
+The overall pattern I followed matches the project's advice: AI to explain and
+trace code I'd already found, then verify by reading and running it myself.
+Asking it to guess a root cause before I'd read the code (as with #3) produced a
+confident answer that turned out to be wrong.
+
 ---
 
 ## Milestone 1 — Codebase Map
